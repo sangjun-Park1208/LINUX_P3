@@ -35,6 +35,7 @@ typedef struct Node{
 typedef struct List{ // duplicate file List
 	Node* front;
 	Node* rear;
+	Node* cur;
 	struct List* next;
 	struct List* prev;
 	int count;
@@ -58,19 +59,29 @@ unsigned char hashVal[HASH_SIZE];
 int fmd5_callcnt;
 int DUP;
 int DIF_FILE;
-
+Set set;
+Queue queue;
+char curr_dir[PATH_MAX-256];
+char tmp_buf[PATH_MAX];
+char real_path[PATH_MAX];
+unsigned char f_hash[HASH_SIZE];
 
 int split(char* string, char* seperator, char* argv[]);
 int check_fmd5_opt(int arg_cnt, char* arg_vec[], char* Ext, char* Min, char* Max, char* Target_dir, int* Thread_num);
 off_t get_fileSize(char* path);
 int get_dupList(char* Ext, char* Min, char* Max, char* Target_dir, Set* set);
+
 int check_targetDir(char* Ext, char* Target_dir);
-void BFS(Queue queue, Set* set);
+int check_ext(char* Ext, char* path);
+void BFS(Queue queue, Set* set, char* Ext, char* Min, char* Max);
+
 void remove_dup(Set* set);
 int check_size(char* Min, char* Max, char* path);
 char* toComma(long n, char* com_str);
 void print_dupSet(Set* set);
 void print_duplist(List* list);
+void printList(List* list);
+void printSet(Set* set);
 void sort_upward();
 void sort_downward();
 
@@ -78,7 +89,10 @@ void sort_downward();
 /****** LinkedList for duplicate Set *******/
 void init_Set(Set* set);
 int isEmpty_Set(Set* set);
-void append_Set(Set* set, List* list);
+void append_Set(Set* set, char* path);
+
+
+
 
 /****** LinkedList for fileList *******/
 void init_List(List* list);
@@ -105,7 +119,6 @@ int main(int argc, char* argv[]){
 	char input[BUF_MAX];
 	int arg_cnt = 0;
 	char* arg_vec[ARG_MAX];
-	Set set;
 
 	while(1){
 		fflush(stdin);
@@ -139,7 +152,6 @@ int main(int argc, char* argv[]){
 				continue;
 			}
 			
-
 			print_dupSet(&set);
 
 
@@ -204,20 +216,26 @@ int isEmpty_Set(Set* set){
 	return set->count == 0;
 }
 
-void append_Set(Set* set, List* list){
+void append_Set(Set* set, char* path){
 	List* newlist = (List*)malloc(sizeof(List));
+	memset(newlist, 0, sizeof(List));
 	
+	newlist->rear = NULL;
+	append_List(newlist, path);
+
 	newlist->next = NULL;
 	newlist->prev = set->rear;
 
 	if(isEmpty_Set(set)){
+
 		set->front = newlist;
 		set->rear = newlist;
+		newlist->prev = NULL;
 	}
-	else
+	else{
 		set->rear->next = newlist;
-
-	set->rear = newlist;
+		set->rear = newlist;
+	}
 	set->count++;
 	return;
 }
@@ -247,7 +265,7 @@ void append_List(List* list, char* path){
 
 	md5(IN, hashVal);
 	fclose(IN);
-
+	
 	newNode->size = get_fileSize(path);
 	strcpy(newNode->path, path);
 	strcpy(newNode->hash, hashVal);
@@ -257,11 +275,12 @@ void append_List(List* list, char* path){
 	if(isEmpty_List(list)){
 		list->front = newNode;
 		list->rear = newNode;
+		newNode->prev = NULL;
 	}
-	else
+	else{
 		list->rear->next = newNode;
-
-	list->rear = newNode;
+		list->rear = newNode;
+	}
 	list->count++;
 	return;
 }
@@ -273,32 +292,35 @@ int isEmpty_dir(Queue* queue){
 	return queue->count == 0;
 }
 
+void initQueue(Queue* queue){
+	queue->front = queue->rear = NULL;
+	queue->count = 0;
+	return;
+}
 void enqueue(Queue* queue, char* path){
 	Node* newNode = (Node*)malloc(sizeof(Node));
 	
 	strcpy(newNode->path, path);
 	newNode->next = NULL;
-	newNode->prev = queue->rear;
 
 	if(isEmpty_dir(queue)){
 		queue->front = newNode;
 		queue->rear = newNode;
+		newNode->prev = NULL;
 	}
-	else
+	else{
+		newNode->prev = queue->rear;
 		queue->rear->next = newNode;
-
-	queue->rear = newNode;
+		queue->rear = newNode;
+	}
 	queue->count++;
 	return;
 }
 
 char* dequeue(Queue* queue, char* path){
-	Node* ptr;
-	if(isEmpty_dir(queue))
-		return NULL;
-	ptr = queue->front;
-	strcpy(path, ptr->path);
-	queue->front = ptr->next;
+	Node* ptr = queue->front;
+	strcpy(path, queue->front->path);
+	queue->front = queue->front->next;
 	free(ptr);
 	queue->count--;
 	return path;
@@ -393,12 +415,11 @@ int get_dupList(char* Ext, char* Min, char* Max, char* Target_dir, Set* set){
 		return -1;
 
 
-	Queue queue;
 	initQueue(&queue);
 
 	if(!strcmp(Target_dir, "/")){
 		enqueue(&queue, "/");
-		BFS(queue, set);
+		BFS(queue, set, Ext, Min, Max);
 	}
 	else if(Target_dir[0] == '.'){
 		if(realpath(Target_dir, realPath) == NULL){
@@ -406,7 +427,7 @@ int get_dupList(char* Ext, char* Min, char* Max, char* Target_dir, Set* set){
 			return -1;
 		}
 		enqueue(&queue, realPath);
-		BFS(queue, set);
+		BFS(queue, set, Ext, Min, Max);
 	}
 	else{
 		if(realpath(Target_dir, realPath) == NULL){
@@ -414,9 +435,12 @@ int get_dupList(char* Ext, char* Min, char* Max, char* Target_dir, Set* set){
 			return -1;
 		}
 		enqueue(&queue, realPath);
-		BFS(queue, set);
+		BFS(queue, set, Ext, Min, Max);
 	}
 
+	remove_dup(set);
+	if(set->count == 0)
+		printf("No duplicates in %s\n", realPath);
 	return 0;
 }
 
@@ -442,25 +466,39 @@ int check_targetDir(char* Ext, char* Target_dir){
 	return 0;
 }
 
-void BFS(Queue queue, Set* set){
+int check_ext(char* Ext, char* path){
+	if(!strcmp(Ext, "*"))
+		return 0;
+	else{
+		if(strrchr(path, '.') == NULL)
+			return 1;
+		if(!strcmp(&Ext[2], strrchr(path, '.') + 1))
+			return 0;
+		else
+			return 1;
+	}
+}
+
+
+
+void BFS(Queue queue, Set* set, char* Ext, char* Min, char* Max){
 	struct dirent** namelist;
 	struct stat st;
-	char curr_dir[PATH_MAX-256];
-	char tmp_buf[PATH_MAX];
 
-	if(isEmpty_dir(&queue))
+	if(isEmpty_dir(&queue)){
 		return;
+	}
 	else{
 		memset(curr_dir, '\0', PATH_MAX-256);
 		memset(tmp_buf, '\0', PATH_MAX);
 		strcpy(curr_dir, dequeue(&queue, tmp_buf));
 		int fileCnt = scandir(curr_dir, &namelist, NULL, alphasort);
+		int i;
 		for(i=0; i<fileCnt; i++){
 			if(!strcmp(namelist[i]->d_name, "."))
 				continue;
 			if(!strcmp(namelist[i]->d_name, ".."))
 				continue;
-			char real_path[PATH_MAX];
 			memset(real_path, '\0', PATH_MAX);
 			if(!strcmp(curr_dir, "/"))
 				sprintf(real_path, "%s%s", curr_dir, namelist[i]->d_name);
@@ -468,7 +506,6 @@ void BFS(Queue queue, Set* set){
 				sprintf(real_path, "%s/%s", curr_dir, namelist[i]->d_name);
 			lstat(real_path, &st);
 
-			unsigned char tmp_sc[HASH_SIZE];
 			memset(f_hash, '\0', HASH_SIZE);
 			FILE* IN;
 			if((IN = fopen(real_path, "r")) == NULL)
@@ -482,42 +519,39 @@ void BFS(Queue queue, Set* set){
 			fclose(IN);
 
 
-			int f_Size = get_fileSize(real_path);
+			int f_size = get_fileSize(real_path);
 
 			if(S_ISDIR(st.st_mode)){
 				if((strcmp(real_path, "/proc") == 0) || (strcmp(real_path, "/run") == 0) || (strcmp(real_path, "/sys") == 0))
 					continue;
-				else
+				else{
 					enqueue(&queue, real_path);
+				}
 			}
 			else if(S_ISREG(st.st_mode)){
 				int condition = 0;
 				condition += check_ext(Ext, real_path);
 				condition += check_size(Min, Max, real_path);
-
+				printf("%s\n", real_path);
 				if(condition == 0){
 					if(set->count == 0){
-						List list;
-						append_List(&list, real_path);
-						append_Set(&set, &list);
+						append_Set(set, real_path);
 					}
 					else{
 						int isFirst = 1;
-						int j;
 						set->cur = set->front;
 						while(set->cur != NULL){
 							if(!strcmp(set->cur->front->hash, f_hash) && (f_size == set->cur->front->size)){ // hash & size
-								append_List(&set->cur, real_path);
-								isfirst = 0;
+								append_List(set->cur, real_path);
+				
+								isFirst = 0;
 								DUP++;
 								break;
 							}
 							set->cur = set->cur->next;
 						}
 						if(isFirst == 1){
-							List list;
-							append_List(&list, real_path);
-							append_Set(&set, &list);
+							append_Set(set, real_path);
 							DIF_FILE++;
 						}
 					}
@@ -527,22 +561,49 @@ void BFS(Queue queue, Set* set){
 				continue;
 		}
 	}
-	
-	if(set->count == 1){}
-	else
-		set->count--;
-
-	remove_dup(&set);
+	BFS(queue, set, Ext, Min, Max);
 	return;
 }
+
+
+void printList(List* list){
+	list->cur = list->front;
+	printf("-----------------------------------\n");
+	while(list->cur != NULL){
+		printf("path : %s\n", list->cur->path);
+		list->cur = list->cur->next;
+	}
+}
+
+void printSet(Set* set){
+	set->cur = set->front;
+	while(set->cur != NULL){
+		printList(set->cur);
+		set->cur = set->cur->next;
+	}
+
+}
+
 
 void remove_dup(Set* set){
 	set->cur = set->front;
 	while(set->cur != NULL){
 		if(set->cur->count == 1){
-			init_List(&set->cur);
-			set->cur->prev = set->cur->next;
-			set->cur->next = set->cur->prev;
+			if(set->cur->prev == NULL){
+				set->cur->next->prev = NULL;
+				set->front = set->cur->next;
+				init_List(set->cur);
+			}
+			else if(set->cur->next == NULL){
+				set->cur->prev->next = NULL;
+				set->rear = set->cur->prev;
+				init_List(set->cur);
+			}
+			else{
+				set->cur->prev->next = set->cur->next;
+				set->cur->next->prev = set->cur->prev;
+				init_List(set->cur);
+			}
 			set->count--;
 		}
 		set->cur = set->cur->next;
@@ -634,16 +695,19 @@ void print_dupSet(Set* set){
 		memset(f_hash, '\0', HASH_SIZE);
 		memset(fileSize, '\0', FILE_SIZE);
 		FILE* IN;
-		if((IN = fopen(set->cur->front->path, "r")) == NULL)
+
+		if((IN = fopen(set->cur->front->path, "r")) == NULL){
+			printf("ppppp : %s", set->cur->front->path);
 			printf("In print_dupList fopen(): %s\n", strerror(errno));
+		}
 		md5(IN, f_hash);
 		fclose(IN);
 		toComma(set->cur->front->size, fileSize);
 		printf("---- Identical files #%d (%s bytes -", i+1, fileSize);
 		for(int j=0; j < MD5_DIGEST_LENGTH; j++)
-			printf("%02x", tmp[j]);
+			printf("%02x", f_hash[j]);
 		printf(") ----\n");
-		print_duplist(&set->cur);
+		print_duplist(set->cur);
 
 		i++;
 		set->cur = set->cur->next;
@@ -664,11 +728,11 @@ void print_duplist(List* list){
 		localtime_r(&mt, &mT);
 		localtime_r(&at, &aT);
 
-		printf("[%d] %s (mtime : %d-%02d-%02d %02d:%02d:%02d) (atime: %d-%02d-%02d %02d:%02d:%02d) (uid : %d) (gid : %d)\n",
+		printf("[%d] %s (mtime : %d-%02d-%02d %02d:%02d:%02d) (atime: %d-%02d-%02d %02d:%02d:%02d) (uid : %d) (gid : %d) (mode : %o)\n",
 				index++, cur->path,
 				mT.tm_year+1900, mT.tm_mon+1, mT.tm_mday+1, mT.tm_hour, mT.tm_min, mT.tm_sec,
 				aT.tm_year+1900, aT.tm_mon+1, aT.tm_mday+1, aT.tm_hour, aT.tm_min, aT.tm_sec,
-				getuid(), getgid());
+				st.st_uid, st.st_gid, st.st_mode);
 		
 		cur = cur->next;
 	}
