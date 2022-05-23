@@ -82,8 +82,10 @@ void print_dupSet(Set* set);
 void print_duplist(List* list);
 void printList(List* list);
 void printSet(Set* set);
-void sort_upward();
-void sort_downward();
+void default_sort(Set* set);
+void sort_upward(Set* set);
+void sort_downward(Set* set);
+void delete_prompt(void);
 
 
 /****** LinkedList for duplicate Set *******/
@@ -153,6 +155,9 @@ int main(int argc, char* argv[]){
 			}
 			
 			print_dupSet(&set);
+			default_sort(&set);
+
+			delete_prompt();
 
 
 			fmd5_callcnt++;
@@ -740,10 +745,23 @@ void print_duplist(List* list){
 	return;
 }
 
-void sort_upward(){
+void default_sort(Set* set){
 
 }
 
-void sort_downward(){
+
+void sort_upward(Set* set){
+	
+}
+
+void sort_downward(Set* set){
+
+}
+
+
+void delete_prompt(void){
+
+
+
 
 }
