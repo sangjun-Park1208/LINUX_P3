@@ -11,6 +11,7 @@
 #include <time.h>
 #include <errno.h>
 #include <pwd.h>
+#include <pthread.h>
 
 #define PATH_MAX 4096
 #define HASH_SIZE 35
@@ -18,6 +19,9 @@
 #define BUF_MAX 1024
 #define ARG_MAX 11
 #define FILE_SIZE 16
+#define TIME_BUF 20
+#define EXT_BUF 20
+#define SIZE_BUF 10
 
 #define KB 1000
 #define MB 1000000
@@ -36,6 +40,10 @@ typedef struct List{ // duplicate file List
 	Node* front;
 	Node* rear;
 	Node* cur;
+	Node* tmp1;
+	Node* tmp2;
+	Node* tmp3;
+	Node* tmp_cur;
 	struct List* next;
 	struct List* prev;
 	int count;
@@ -45,6 +53,10 @@ typedef struct Set{ // duplicate file Set
 	List* front;
 	List* rear;
 	List* cur;
+	List* tmp1;
+	List* tmp2;
+	List* tmp3;
+	List* tmp_cur;
 	int count;
 }Set;
 
@@ -65,6 +77,10 @@ char curr_dir[PATH_MAX-256];
 char tmp_buf[PATH_MAX];
 char real_path[PATH_MAX];
 unsigned char f_hash[HASH_SIZE];
+char homedir_path[PATH_MAX-256];
+char logfile_path[PATH_MAX];
+char trashdir_path[PATH_MAX];
+char trashinfo_path[PATH_MAX];
 
 int split(char* string, char* seperator, char* argv[]);
 int check_fmd5_opt(int arg_cnt, char* arg_vec[], char* Ext, char* Min, char* Max, char* Target_dir, int* Thread_num);
@@ -82,19 +98,51 @@ void print_dupSet(Set* set);
 void print_duplist(List* list);
 void printList(List* list);
 void printSet(Set* set);
-void default_sort(Set* set);
-void sort_upward(Set* set);
-void sort_downward(Set* set);
-void delete_prompt(void);
 
+/******** [LIST] option *********/
+void list_opt(Set* set, int arg_cnt, char* arg_vec[]);
+void up_sort_size(Set* set);
+void down_sort_size(Set* set);
+void up_sort_filename(Set* set);
+void down_sort_filename(Set* set);
+void up_sort_uid(Set* set);
+void down_sort_uid(Set* set);
+void up_sort_gid(Set* set);
+void down_sort_gid(Set* set);
+void up_sort_mode(Set* set);
+void down_sort_mode(Set* set);
+void up_sort_size_filelist(Set* set);
+void down_sort_size_filelist(Set* set);
+
+
+
+/******** [TRASH] option *********/
+void trash_opt(Set* set, int arg_cnt, char* arg_vec[]);
+
+
+
+/******** [RESTORE] option *********/
+void restore_opt(Set* set, int RES_IDX);
+
+
+
+
+/******** Delete function *********/
+void delete_prompt(Set* set);
+void delete_d(int SET_IDX, int LIST_IDX, Set* set);
+void d_opt(int SET_IDX, int LIST_IDX, Set* set);
+void delete_i(int SET_IDX, Set* set);
+void i_opt(int SET_IDX, Set* set);
+void delete_f(int SET_IDX, int REC_IDX, Set* set);
+void f_opt(int SET_IDX, Set* set);
+void delete_t(int SET_IDX, int REC_IDX, Set* set);
+void t_opt(int SET_IDX, Set* set);
+int get_recentIDX(int SET_IDX, Set* set);
 
 /****** LinkedList for duplicate Set *******/
 void init_Set(Set* set);
 int isEmpty_Set(Set* set);
 void append_Set(Set* set, char* path);
-
-
-
 
 /****** LinkedList for fileList *******/
 void init_List(List* list);
@@ -115,13 +163,19 @@ int MD5_Update(MD5_CTX* c, const void* data, unsigned long len);
 int MD5_Final(unsigned char* md, MD5_CTX* c);
 
 
-
 int main(int argc, char* argv[]){
 	
 	char input[BUF_MAX];
 	int arg_cnt = 0;
 	char* arg_vec[ARG_MAX];
+	char* Ext = (char*)malloc(EXT_BUF);
+	char* Min = (char*)malloc(SIZE_BUF);
+	char* Max = (char*)malloc(SIZE_BUF);
+	char* Target_dir = (char*)malloc(BUF_MAX);
 
+
+	struct timeval startTime, endTime;
+	
 	while(1){
 		fflush(stdin);
 		printf("20182613> ");
@@ -138,26 +192,34 @@ int main(int argc, char* argv[]){
 				continue;
 			}
 
-			char* Ext = (char*)malloc(strlen(arg_vec[2]));
-			char* Min = (char*)malloc(strlen(arg_vec[4]));
-			char* Max = (char*)malloc(strlen(arg_vec[6]));
-			char* Target_dir = (char*)malloc(strlen(arg_vec[8]));
 			int Thread_num = 1; // default
 
 			if(check_fmd5_opt(arg_cnt, arg_vec, Ext, Min, Max, Target_dir, &Thread_num) < 0){
 				fprintf(stdout, "option input error\n");
 				continue;
 			}
-			
+			gettimeofday(&startTime, NULL);
+
 			if(get_dupList(Ext, Min, Max, Target_dir, &set) < 0){
 				fprintf(stdout, "input error\n");
 				continue;
 			}
 			
-			print_dupSet(&set);
-			default_sort(&set);
+			gettimeofday(&endTime, NULL);
+			
+			endTime.tv_sec -= startTime.tv_sec;
+			if(endTime.tv_usec < startTime.tv_usec){
+				endTime.tv_sec--;
+				endTime.tv_usec += 1000000;
+			}
 
-			delete_prompt();
+			if(fmd5_callcnt == 0){
+				up_sort_size(&set);
+			}
+			print_dupSet(&set);
+
+			printf("Searching time: %ld:%lu(sec:usec)\n\n", endTime.tv_sec, endTime.tv_usec);
+			delete_prompt(&set);
 
 
 			fmd5_callcnt++;
@@ -166,9 +228,12 @@ int main(int argc, char* argv[]){
 			if(fmd5_callcnt < 1)
 				continue;
 			printf("list\n");
+			list_opt(&set, arg_cnt, arg_vec);
+			print_dupSet(&set);
 		}
 		else if(!strcmp(arg_vec[0], "trash")){
 			printf("trash\n");
+			trash_opt(&set, arg_cnt, arg_vec);
 		}
 		else if(!strcmp(arg_vec[0], "restore")){
 			if(fmd5_callcnt < 1)
@@ -191,10 +256,6 @@ int main(int argc, char* argv[]){
 
 	}
 
-
-	struct timeval startTime, endTime;
-	gettimeofday(&startTime, NULL);
-	gettimeofday(&endTime, NULL);
 
 	exit(0);
 }
@@ -290,7 +351,23 @@ void append_List(List* list, char* path){
 	return;
 }
 
-
+void delete_List(List* list){
+	List* tmp = list;
+	if(list->prev == NULL){
+		list->next->prev = NULL;
+		init_List(tmp);
+	}
+	else if(tmp->next == NULL){
+		list->prev->next = NULL;
+		init_List(tmp);
+	}
+	else{
+		list->prev->next = list->next;
+		list->next->prev = list->prev;
+		init_List(tmp);
+	}
+	return;
+}
 
 
 int isEmpty_dir(Queue* queue){
@@ -537,7 +614,6 @@ void BFS(Queue queue, Set* set, char* Ext, char* Min, char* Max){
 				int condition = 0;
 				condition += check_ext(Ext, real_path);
 				condition += check_size(Min, Max, real_path);
-				printf("%s\n", real_path);
 				if(condition == 0){
 					if(set->count == 0){
 						append_Set(set, real_path);
@@ -702,7 +778,6 @@ void print_dupSet(Set* set){
 		FILE* IN;
 
 		if((IN = fopen(set->cur->front->path, "r")) == NULL){
-			printf("ppppp : %s", set->cur->front->path);
 			printf("In print_dupList fopen(): %s\n", strerror(errno));
 		}
 		md5(IN, f_hash);
@@ -745,23 +820,1667 @@ void print_duplist(List* list){
 	return;
 }
 
-void default_sort(Set* set){
+void up_sort_size(Set* set){ // for fileset sorting
+	int check=0;
+	set->cur = set->front->next;
+	set->tmp_cur = set->rear;
+
+	for(int i=0; i<set->count-1; i++)	{
+		while(set->cur != set->tmp_cur){
+			if(set->cur == set->front){ // first case, A(cur,front)->B->C
+				if(set->cur->front->size  >  set->cur->next->front->size){
+					set->tmp1 = set->front->next; // tmp1 = B
+					set->tmp2 = set->tmp1->next; // tmp2 = C
+
+					set->cur->next = set->tmp2; // A->C
+					set->tmp1->next = set->front; // B->A
+					
+					set->tmp2->prev = set->cur; // C's prev = A
+					set->cur->prev = set->tmp1; // A's prev = B
+					set->tmp1->prev = NULL;
+
+					set->front = set->tmp1; // move 'front' to B
+				}
+				else
+					set->cur = set->cur->next;
+			}
+			else if(set->cur->next == set->rear){ // last case, B->C(cur)->D(rear)
+				if(set->cur->front->size  >  set->cur->next->front->size){
+					check = 1;
+					set->tmp1 = set->cur->prev; // tmp1 = B
+					set->tmp1->next = set->rear; // B->D
+					set->cur->next = NULL; // C->NULL
+					set->rear->next = set->cur; // D->C
+
+					set->rear->prev = set->tmp1; // D's prev = B
+					set->cur->prev = set->rear; // C's prev = D
+					
+					set->rear = set->cur; // move 'rear' to C
+					set->tmp_cur = set->cur;
+					set->tmp_cur->prev = set->cur->prev;
+				}
+				else
+					set->cur = set->cur->next;
+			}
+			else{ // other case, A->B(cur)->C->D
+				if(set->cur->front->size  >  set->cur->next->front->size){
+					set->tmp1 = set->cur->prev; // tmp1 = A
+					set->tmp2 = set->cur->next; // tmp2 = C
+					set->tmp3 = set->cur->next->next; // tmp3 = D
+
+					set->tmp1->next = set->tmp2; // A->C
+					set->cur->next = set->tmp3; // B->D
+					set->tmp2->next = set->cur; // C->B
+
+					set->tmp2->prev = set->tmp1; // C's prev = A
+					set->tmp3->prev = set->cur; // D's prev = B
+					set->cur->prev = set->tmp2; // B's prev = C
+				}
+				else
+					set->cur = set->cur->next;
+			}
+		}
+		if(check==0){
+			set->tmp_cur = set->tmp_cur->next;
+			check=1;
+		}
+		set->cur = set->front;
+	}
+	
+	return;
+}
+
+void down_sort_size(Set* set){ // for fileset sotring
+	int check=0;
+	set->cur = set->front->next;
+	set->tmp_cur = set->rear;
+
+	for(int i=0; i<set->count-1; i++)	{
+		while(set->cur != set->tmp_cur){
+			if(set->cur == set->front){ // first case, A(cur,front)->B->C
+				if(set->cur->front->size  <  set->cur->next->front->size){
+					set->tmp1 = set->front->next; // tmp1 = B
+					set->tmp2 = set->tmp1->next; // tmp2 = C
+
+					set->cur->next = set->tmp2; // A->C
+					set->tmp1->next = set->front; // B->A
+					
+					set->tmp2->prev = set->cur; // C's prev = A
+					set->cur->prev = set->tmp1; // A's prev = B
+					set->tmp1->prev = NULL;
+
+					set->front = set->tmp1; // move 'front' to B
+				}
+				else
+					set->cur = set->cur->next;
+			}
+			else if(set->cur->next == set->rear){ // last case, B->C(cur)->D(rear)
+				if(set->cur->front->size  <  set->cur->next->front->size){
+					check = 1;
+					set->tmp1 = set->cur->prev; // tmp1 = B
+					set->tmp1->next = set->rear; // B->D
+					set->cur->next = NULL; // C->NULL
+					set->rear->next = set->cur; // D->C
+
+					set->rear->prev = set->tmp1; // D's prev = B
+					set->cur->prev = set->rear; // C's prev = D
+					
+					set->rear = set->cur; // move 'rear' to C
+					set->tmp_cur = set->cur;
+					set->tmp_cur->prev = set->cur->prev;
+				}
+				else
+					set->cur = set->cur->next;
+			}
+			else{ // other case, A->B(cur)->C->D
+				if(set->cur->front->size  <  set->cur->next->front->size){
+					set->tmp1 = set->cur->prev; // tmp1 = A
+					set->tmp2 = set->cur->next; // tmp2 = C
+					set->tmp3 = set->cur->next->next; // tmp3 = D
+
+					set->tmp1->next = set->tmp2; // A->C
+					set->cur->next = set->tmp3; // B->D
+					set->tmp2->next = set->cur; // C->B
+
+					set->tmp2->prev = set->tmp1; // C's prev = A
+					set->tmp3->prev = set->cur; // D's prev = B
+					set->cur->prev = set->tmp2; // B's prev = C
+				}
+				else
+					set->cur = set->cur->next;
+			}
+		}
+		if(check==0){
+			set->tmp_cur = set->tmp_cur->next;
+			check=1;
+		}
+		set->cur = set->front;
+	}
+	
+	return;
+}
+
+void up_sort_filename(Set* set){ // for [filelist] option
+	int check=0;
+	set->cur = set->front;
+	for(int i=0; i< set->cur->count-1; i++){
+		set->cur->cur = set->cur->front->next;
+		set->cur->tmp_cur = set->cur->rear;
+		while(set->cur->cur != set->cur->tmp_cur){
+			if(set->cur->cur == set->cur->front){ // in cur, first case : A(cur, front)->B->C
+				if(strlen(set->cur->front->path) > strlen(set->cur->front->next->path)){
+					set->cur->tmp1 = set->cur->front->next; // tmp1 = B
+					set->cur->tmp2 = set->cur->tmp1->next; // tmp2 = C
+
+					set->cur->cur->next = set->cur->tmp2; // A->C
+					set->cur->tmp1->next = set->cur->front; // B->A
+
+					set->cur->tmp2->prev = set->cur->cur; // C's prev = A
+					set->cur->cur->prev = set->cur->tmp1; // A's prev = B
+					set->cur->tmp1->prev = NULL;
+
+					set->cur->front = set->cur->tmp1; // move 'front' to B
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			else if(set->cur->cur->next == set->cur->rear){ // in cur, last case : B->C(cur)->D(rear)
+				if(strlen(set->cur->cur->path) > strlen(set->cur->cur->next->path)){
+					check = 1;
+					set->cur->tmp1 = set->cur->cur->prev; // tmp1 = B
+					set->cur->tmp1->next = set->cur->rear; // B->D
+					set->cur->cur->next = NULL; // C->NULL
+					set->cur->rear->next = set->cur->cur; // D->C
+
+					set->cur->rear->prev = set->cur->tmp1; // D's prev = B
+					set->cur->cur->prev = set->cur->rear; // C's prev = D
+
+					set->cur->rear = set->cur->cur; // move 'rear' to C
+					set->cur->tmp_cur = set->cur->cur;
+					set->cur->tmp_cur->prev = set->cur->cur->prev;
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			else{ // other case : A->B(cur)->C->D
+				if(strlen(set->cur->cur->path) > strlen(set->cur->cur->next->path)){
+					set->cur->tmp1 = set->cur->cur->prev; //tmp1 = A
+					set->cur->tmp2 = set->cur->cur->next; //tmp2 = C
+					set->cur->tmp3 = set->cur->cur->next->next; // tmp3 = D
+
+					set->cur->tmp1->next = set->cur->tmp2; // A->C
+					set->cur->cur->next = set->cur->tmp3; // B->D
+					set->cur->tmp2->next = set->cur->cur; // C->B
+
+					set->cur->tmp2->prev = set->cur->tmp1; // C's prev = A
+					set->cur->tmp3->prev = set->cur->cur; // D's prev = B
+					set->cur->cur->prev = set->cur->tmp2; // B's prev = C
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			if(check==0){
+				set->cur->tmp_cur = set->cur->tmp_cur->next;
+				check=1;
+			}	
+		}
+		set->cur = set->cur->next;
+	}
+	return;
+}
+
+void down_sort_filename(Set* set){
+	int check=0;
+	set->cur = set->front;
+	for(int i=0; i< set->cur->count-1; i++){
+		set->cur->cur = set->cur->front->next;
+		set->cur->tmp_cur = set->cur->rear;
+		while(set->cur->cur != set->cur->tmp_cur){
+			if(set->cur->cur == set->cur->front){ // in cur, first case : A(cur, front)->B->C
+				if(strlen(set->cur->front->path) < strlen(set->cur->front->next->path)){
+					set->cur->tmp1 = set->cur->front->next; // tmp1 = B
+					set->cur->tmp2 = set->cur->tmp1->next; // tmp2 = C
+
+					set->cur->cur->next = set->cur->tmp2; // A->C
+					set->cur->tmp1->next = set->cur->front; // B->A
+
+					set->cur->tmp2->prev = set->cur->cur; // C's prev = A
+					set->cur->cur->prev = set->cur->tmp1; // A's prev = B
+					set->cur->tmp1->prev = NULL;
+
+					set->cur->front = set->cur->tmp1; // move 'front' to B
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			else if(set->cur->cur->next == set->cur->rear){ // in cur, last case : B->C(cur)->D(rear)
+				if(strlen(set->cur->cur->path) < strlen(set->cur->cur->next->path)){
+					check = 1;
+					set->cur->tmp1 = set->cur->cur->prev; // tmp1 = B
+					set->cur->tmp1->next = set->cur->rear; // B->D
+					set->cur->cur->next = NULL; // C->NULL
+					set->cur->rear->next = set->cur->cur; // D->C
+
+					set->cur->rear->prev = set->cur->tmp1; // D's prev = B
+					set->cur->cur->prev = set->cur->rear; // C's prev = D
+
+					set->cur->rear = set->cur->cur; // move 'rear' to C
+					set->cur->tmp_cur = set->cur->cur;
+					set->cur->tmp_cur->prev = set->cur->cur->prev;
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			else{ // other case : A->B(cur)->C->D
+				if(strlen(set->cur->cur->path) < strlen(set->cur->cur->next->path)){
+					set->cur->tmp1 = set->cur->cur->prev; //tmp1 = A
+					set->cur->tmp2 = set->cur->cur->next; //tmp2 = C
+					set->cur->tmp3 = set->cur->cur->next->next; // tmp3 = D
+
+					set->cur->tmp1->next = set->cur->tmp2; // A->C
+					set->cur->cur->next = set->cur->tmp3; // B->D
+					set->cur->tmp2->next = set->cur->cur; // C->B
+
+					set->cur->tmp2->prev = set->cur->tmp1; // C's prev = A
+					set->cur->tmp3->prev = set->cur->cur; // D's prev = B
+					set->cur->cur->prev = set->cur->tmp2; // B's prev = C
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			if(check==0){
+				set->cur->tmp_cur = set->cur->tmp_cur->next;
+				check=1;
+			}	
+		}
+		set->cur = set->cur->next;
+	}
+	return;
 
 }
 
+void up_sort_uid(Set* set){
+	struct stat st1;
+	struct stat st2;
+	int check=0;
+	set->cur = set->front;
+	for(int i=0; i< set->cur->count-1; i++){
+		set->cur->cur = set->cur->front->next;
+		set->cur->tmp_cur = set->cur->rear;
+		while(set->cur->cur != set->cur->tmp_cur){
+			if(set->cur->cur == set->cur->front){ // in cur, first case : A(cur, front)->B->C
+				lstat(set->cur->cur->path, &st1);
+				lstat(set->cur->cur->next->path, &st2);
+				if(st1.st_uid > st2.st_uid){
+					set->cur->tmp1 = set->cur->front->next; // tmp1 = B
+					set->cur->tmp2 = set->cur->tmp1->next; // tmp2 = C
 
-void sort_upward(Set* set){
+					set->cur->cur->next = set->cur->tmp2; // A->C
+					set->cur->tmp1->next = set->cur->front; // B->A
+
+					set->cur->tmp2->prev = set->cur->cur; // C's prev = A
+					set->cur->cur->prev = set->cur->tmp1; // A's prev = B
+					set->cur->tmp1->prev = NULL;
+
+					set->cur->front = set->cur->tmp1; // move 'front' to B
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			else if(set->cur->cur->next == set->cur->rear){ // in cur, last case : B->C(cur)->D(rear)
+				lstat(set->cur->cur->path, &st1);
+				lstat(set->cur->cur->next->path, &st2);
+				if(st1.st_uid > st2.st_uid){
+					check = 1;
+					set->cur->tmp1 = set->cur->cur->prev; // tmp1 = B
+					set->cur->tmp1->next = set->cur->rear; // B->D
+					set->cur->cur->next = NULL; // C->NULL
+					set->cur->rear->next = set->cur->cur; // D->C
+
+					set->cur->rear->prev = set->cur->tmp1; // D's prev = B
+					set->cur->cur->prev = set->cur->rear; // C's prev = D
+
+					set->cur->rear = set->cur->cur; // move 'rear' to C
+					set->cur->tmp_cur = set->cur->cur;
+					set->cur->tmp_cur->prev = set->cur->cur->prev;
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			else{ // other case : A->B(cur)->C->D
+				lstat(set->cur->cur->path, &st1);
+				lstat(set->cur->cur->next->path, &st2);
+				if(st1.st_uid > st2.st_uid){
+					set->cur->tmp1 = set->cur->cur->prev; //tmp1 = A
+					set->cur->tmp2 = set->cur->cur->next; //tmp2 = C
+					set->cur->tmp3 = set->cur->cur->next->next; // tmp3 = D
+
+					set->cur->tmp1->next = set->cur->tmp2; // A->C
+					set->cur->cur->next = set->cur->tmp3; // B->D
+					set->cur->tmp2->next = set->cur->cur; // C->B
+
+					set->cur->tmp2->prev = set->cur->tmp1; // C's prev = A
+					set->cur->tmp3->prev = set->cur->cur; // D's prev = B
+					set->cur->cur->prev = set->cur->tmp2; // B's prev = C
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			if(check==0){
+				set->cur->tmp_cur = set->cur->tmp_cur->next;
+				check=1;
+			}	
+		}
+		set->cur = set->cur->next;
+	}
+	return;
 	
 }
 
-void sort_downward(Set* set){
+void down_sort_uid(Set* set){
+	struct stat st1;
+	struct stat st2;
+	int check=0;
+	set->cur = set->front;
+	for(int i=0; i< set->cur->count-1; i++){
+		set->cur->cur = set->cur->front->next;
+		set->cur->tmp_cur = set->cur->rear;
+		while(set->cur->cur != set->cur->tmp_cur){
+			if(set->cur->cur == set->cur->front){ // in cur, first case : A(cur, front)->B->C
+				lstat(set->cur->cur->path, &st1);
+				lstat(set->cur->cur->next->path, &st2);
+				if(st1.st_uid < st2.st_uid){
+					set->cur->tmp1 = set->cur->front->next; // tmp1 = B
+					set->cur->tmp2 = set->cur->tmp1->next; // tmp2 = C
+
+					set->cur->cur->next = set->cur->tmp2; // A->C
+					set->cur->tmp1->next = set->cur->front; // B->A
+
+					set->cur->tmp2->prev = set->cur->cur; // C's prev = A
+					set->cur->cur->prev = set->cur->tmp1; // A's prev = B
+					set->cur->tmp1->prev = NULL;
+
+					set->cur->front = set->cur->tmp1; // move 'front' to B
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			else if(set->cur->cur->next == set->cur->rear){ // in cur, last case : B->C(cur)->D(rear)
+				lstat(set->cur->cur->path, &st1);
+				lstat(set->cur->cur->next->path, &st2);
+				if(st1.st_uid < st2.st_uid){
+					check = 1;
+					set->cur->tmp1 = set->cur->cur->prev; // tmp1 = B
+					set->cur->tmp1->next = set->cur->rear; // B->D
+					set->cur->cur->next = NULL; // C->NULL
+					set->cur->rear->next = set->cur->cur; // D->C
+
+					set->cur->rear->prev = set->cur->tmp1; // D's prev = B
+					set->cur->cur->prev = set->cur->rear; // C's prev = D
+
+					set->cur->rear = set->cur->cur; // move 'rear' to C
+					set->cur->tmp_cur = set->cur->cur;
+					set->cur->tmp_cur->prev = set->cur->cur->prev;
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			else{ // other case : A->B(cur)->C->D
+				lstat(set->cur->cur->path, &st1);
+				lstat(set->cur->cur->next->path, &st2);
+				if(st1.st_uid < st2.st_uid){
+					set->cur->tmp1 = set->cur->cur->prev; //tmp1 = A
+					set->cur->tmp2 = set->cur->cur->next; //tmp2 = C
+					set->cur->tmp3 = set->cur->cur->next->next; // tmp3 = D
+
+					set->cur->tmp1->next = set->cur->tmp2; // A->C
+					set->cur->cur->next = set->cur->tmp3; // B->D
+					set->cur->tmp2->next = set->cur->cur; // C->B
+
+					set->cur->tmp2->prev = set->cur->tmp1; // C's prev = A
+					set->cur->tmp3->prev = set->cur->cur; // D's prev = B
+					set->cur->cur->prev = set->cur->tmp2; // B's prev = C
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			if(check==0){
+				set->cur->tmp_cur = set->cur->tmp_cur->next;
+				check=1;
+			}	
+		}
+		set->cur = set->cur->next;
+	}
+	return;
 
 }
 
 
-void delete_prompt(void){
+void up_sort_gid(Set* set){
+	struct stat st1;
+	struct stat st2;
+	int check=0;
+	set->cur = set->front;
+	for(int i=0; i< set->cur->count-1; i++){
+		set->cur->cur = set->cur->front->next;
+		set->cur->tmp_cur = set->cur->rear;
+		while(set->cur->cur != set->cur->tmp_cur){
+			if(set->cur->cur == set->cur->front){ // in cur, first case : A(cur, front)->B->C
+				lstat(set->cur->cur->path, &st1);
+				lstat(set->cur->cur->next->path, &st2);
+				if(st1.st_gid > st2.st_gid){
+					set->cur->tmp1 = set->cur->front->next; // tmp1 = B
+					set->cur->tmp2 = set->cur->tmp1->next; // tmp2 = C
+
+					set->cur->cur->next = set->cur->tmp2; // A->C
+					set->cur->tmp1->next = set->cur->front; // B->A
+
+					set->cur->tmp2->prev = set->cur->cur; // C's prev = A
+					set->cur->cur->prev = set->cur->tmp1; // A's prev = B
+					set->cur->tmp1->prev = NULL;
+
+					set->cur->front = set->cur->tmp1; // move 'front' to B
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			else if(set->cur->cur->next == set->cur->rear){ // in cur, last case : B->C(cur)->D(rear)
+				lstat(set->cur->cur->path, &st1);
+				lstat(set->cur->cur->next->path, &st2);
+				if(st1.st_gid > st2.st_gid){
+					check = 1;
+					set->cur->tmp1 = set->cur->cur->prev; // tmp1 = B
+					set->cur->tmp1->next = set->cur->rear; // B->D
+					set->cur->cur->next = NULL; // C->NULL
+					set->cur->rear->next = set->cur->cur; // D->C
+
+					set->cur->rear->prev = set->cur->tmp1; // D's prev = B
+					set->cur->cur->prev = set->cur->rear; // C's prev = D
+
+					set->cur->rear = set->cur->cur; // move 'rear' to C
+					set->cur->tmp_cur = set->cur->cur;
+					set->cur->tmp_cur->prev = set->cur->cur->prev;
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			else{ // other case : A->B(cur)->C->D
+				lstat(set->cur->cur->path, &st1);
+				lstat(set->cur->cur->next->path, &st2);
+				if(st1.st_gid > st2.st_gid){
+					set->cur->tmp1 = set->cur->cur->prev; //tmp1 = A
+					set->cur->tmp2 = set->cur->cur->next; //tmp2 = C
+					set->cur->tmp3 = set->cur->cur->next->next; // tmp3 = D
+
+					set->cur->tmp1->next = set->cur->tmp2; // A->C
+					set->cur->cur->next = set->cur->tmp3; // B->D
+					set->cur->tmp2->next = set->cur->cur; // C->B
+
+					set->cur->tmp2->prev = set->cur->tmp1; // C's prev = A
+					set->cur->tmp3->prev = set->cur->cur; // D's prev = B
+					set->cur->cur->prev = set->cur->tmp2; // B's prev = C
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			if(check==0){
+				set->cur->tmp_cur = set->cur->tmp_cur->next;
+				check=1;
+			}	
+		}
+		set->cur = set->cur->next;
+	}
+	return;
+
+}
+
+void down_sort_gid(Set* set){
+	struct stat st1;
+	struct stat st2;
+	int check=0;
+	set->cur = set->front;
+	for(int i=0; i< set->cur->count-1; i++){
+		set->cur->cur = set->cur->front->next;
+		set->cur->tmp_cur = set->cur->rear;
+		while(set->cur->cur != set->cur->tmp_cur){
+			if(set->cur->cur == set->cur->front){ // in cur, first case : A(cur, front)->B->C
+				lstat(set->cur->cur->path, &st1);
+				lstat(set->cur->cur->next->path, &st2);
+				if(st1.st_gid < st2.st_gid){
+					set->cur->tmp1 = set->cur->front->next; // tmp1 = B
+					set->cur->tmp2 = set->cur->tmp1->next; // tmp2 = C
+
+					set->cur->cur->next = set->cur->tmp2; // A->C
+					set->cur->tmp1->next = set->cur->front; // B->A
+
+					set->cur->tmp2->prev = set->cur->cur; // C's prev = A
+					set->cur->cur->prev = set->cur->tmp1; // A's prev = B
+					set->cur->tmp1->prev = NULL;
+
+					set->cur->front = set->cur->tmp1; // move 'front' to B
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			else if(set->cur->cur->next == set->cur->rear){ // in cur, last case : B->C(cur)->D(rear)
+				lstat(set->cur->cur->path, &st1);
+				lstat(set->cur->cur->next->path, &st2);
+				if(st1.st_gid < st2.st_gid){
+					check = 1;
+					set->cur->tmp1 = set->cur->cur->prev; // tmp1 = B
+					set->cur->tmp1->next = set->cur->rear; // B->D
+					set->cur->cur->next = NULL; // C->NULL
+					set->cur->rear->next = set->cur->cur; // D->C
+
+					set->cur->rear->prev = set->cur->tmp1; // D's prev = B
+					set->cur->cur->prev = set->cur->rear; // C's prev = D
+
+					set->cur->rear = set->cur->cur; // move 'rear' to C
+					set->cur->tmp_cur = set->cur->cur;
+					set->cur->tmp_cur->prev = set->cur->cur->prev;
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			else{ // other case : A->B(cur)->C->D
+				lstat(set->cur->cur->path, &st1);
+				lstat(set->cur->cur->next->path, &st2);
+				if(st1.st_gid < st2.st_gid){
+					set->cur->tmp1 = set->cur->cur->prev; //tmp1 = A
+					set->cur->tmp2 = set->cur->cur->next; //tmp2 = C
+					set->cur->tmp3 = set->cur->cur->next->next; // tmp3 = D
+
+					set->cur->tmp1->next = set->cur->tmp2; // A->C
+					set->cur->cur->next = set->cur->tmp3; // B->D
+					set->cur->tmp2->next = set->cur->cur; // C->B
+
+					set->cur->tmp2->prev = set->cur->tmp1; // C's prev = A
+					set->cur->tmp3->prev = set->cur->cur; // D's prev = B
+					set->cur->cur->prev = set->cur->tmp2; // B's prev = C
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			if(check==0){
+				set->cur->tmp_cur = set->cur->tmp_cur->next;
+				check=1;
+			}	
+		}
+		set->cur = set->cur->next;
+	}
+	return;
+
+}
+
+void up_sort_mode(Set* set){
+	struct stat st1;
+	struct stat st2;
+	int check=0;
+	set->cur = set->front;
+	for(int i=0; i< set->cur->count-1; i++){
+		set->cur->cur = set->cur->front->next;
+		set->cur->tmp_cur = set->cur->rear;
+		while(set->cur->cur != set->cur->tmp_cur){
+			if(set->cur->cur == set->cur->front){ // in cur, first case : A(cur, front)->B->C
+				lstat(set->cur->cur->path, &st1);
+				lstat(set->cur->cur->next->path, &st2);
+				if(st1.st_mode > st2.st_mode){
+					set->cur->tmp1 = set->cur->front->next; // tmp1 = B
+					set->cur->tmp2 = set->cur->tmp1->next; // tmp2 = C
+
+					set->cur->cur->next = set->cur->tmp2; // A->C
+					set->cur->tmp1->next = set->cur->front; // B->A
+
+					set->cur->tmp2->prev = set->cur->cur; // C's prev = A
+					set->cur->cur->prev = set->cur->tmp1; // A's prev = B
+					set->cur->tmp1->prev = NULL;
+
+					set->cur->front = set->cur->tmp1; // move 'front' to B
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			else if(set->cur->cur->next == set->cur->rear){ // in cur, last case : B->C(cur)->D(rear)
+				lstat(set->cur->cur->path, &st1);
+				lstat(set->cur->cur->next->path, &st2);
+				if(st1.st_mode > st2.st_mode){
+					check = 1;
+					set->cur->tmp1 = set->cur->cur->prev; // tmp1 = B
+					set->cur->tmp1->next = set->cur->rear; // B->D
+					set->cur->cur->next = NULL; // C->NULL
+					set->cur->rear->next = set->cur->cur; // D->C
+
+					set->cur->rear->prev = set->cur->tmp1; // D's prev = B
+					set->cur->cur->prev = set->cur->rear; // C's prev = D
+
+					set->cur->rear = set->cur->cur; // move 'rear' to C
+					set->cur->tmp_cur = set->cur->cur;
+					set->cur->tmp_cur->prev = set->cur->cur->prev;
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			else{ // other case : A->B(cur)->C->D
+				lstat(set->cur->cur->path, &st1);
+				lstat(set->cur->cur->next->path, &st2);
+				if(st1.st_mode > st2.st_mode){
+					set->cur->tmp1 = set->cur->cur->prev; //tmp1 = A
+					set->cur->tmp2 = set->cur->cur->next; //tmp2 = C
+					set->cur->tmp3 = set->cur->cur->next->next; // tmp3 = D
+
+					set->cur->tmp1->next = set->cur->tmp2; // A->C
+					set->cur->cur->next = set->cur->tmp3; // B->D
+					set->cur->tmp2->next = set->cur->cur; // C->B
+
+					set->cur->tmp2->prev = set->cur->tmp1; // C's prev = A
+					set->cur->tmp3->prev = set->cur->cur; // D's prev = B
+					set->cur->cur->prev = set->cur->tmp2; // B's prev = C
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			if(check==0){
+				set->cur->tmp_cur = set->cur->tmp_cur->next;
+				check=1;
+			}	
+		}
+		set->cur = set->cur->next;
+	}
+	return;
+	
+}
 
 
+void down_sort_mode(Set* set){
+	struct stat st1;
+	struct stat st2;
+	int check=0;
+	set->cur = set->front;
+	for(int i=0; i< set->cur->count-1; i++){
+		set->cur->cur = set->cur->front->next;
+		set->cur->tmp_cur = set->cur->rear;
+		while(set->cur->cur != set->cur->tmp_cur){
+			if(set->cur->cur == set->cur->front){ // in cur, first case : A(cur, front)->B->C
+				lstat(set->cur->cur->path, &st1);
+				lstat(set->cur->cur->next->path, &st2);
+				if(st1.st_mode < st2.st_mode){
+					set->cur->tmp1 = set->cur->front->next; // tmp1 = B
+					set->cur->tmp2 = set->cur->tmp1->next; // tmp2 = C
+
+					set->cur->cur->next = set->cur->tmp2; // A->C
+					set->cur->tmp1->next = set->cur->front; // B->A
+
+					set->cur->tmp2->prev = set->cur->cur; // C's prev = A
+					set->cur->cur->prev = set->cur->tmp1; // A's prev = B
+					set->cur->tmp1->prev = NULL;
+
+					set->cur->front = set->cur->tmp1; // move 'front' to B
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			else if(set->cur->cur->next == set->cur->rear){ // in cur, last case : B->C(cur)->D(rear)
+				lstat(set->cur->cur->path, &st1);
+				lstat(set->cur->cur->next->path, &st2);
+				if(st1.st_mode < st2.st_mode){
+					check = 1;
+					set->cur->tmp1 = set->cur->cur->prev; // tmp1 = B
+					set->cur->tmp1->next = set->cur->rear; // B->D
+					set->cur->cur->next = NULL; // C->NULL
+					set->cur->rear->next = set->cur->cur; // D->C
+
+					set->cur->rear->prev = set->cur->tmp1; // D's prev = B
+					set->cur->cur->prev = set->cur->rear; // C's prev = D
+
+					set->cur->rear = set->cur->cur; // move 'rear' to C
+					set->cur->tmp_cur = set->cur->cur;
+					set->cur->tmp_cur->prev = set->cur->cur->prev;
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			else{ // other case : A->B(cur)->C->D
+				lstat(set->cur->cur->path, &st1);
+				lstat(set->cur->cur->next->path, &st2);
+				if(st1.st_mode < st2.st_mode){
+					set->cur->tmp1 = set->cur->cur->prev; //tmp1 = A
+					set->cur->tmp2 = set->cur->cur->next; //tmp2 = C
+					set->cur->tmp3 = set->cur->cur->next->next; // tmp3 = D
+
+					set->cur->tmp1->next = set->cur->tmp2; // A->C
+					set->cur->cur->next = set->cur->tmp3; // B->D
+					set->cur->tmp2->next = set->cur->cur; // C->B
+
+					set->cur->tmp2->prev = set->cur->tmp1; // C's prev = A
+					set->cur->tmp3->prev = set->cur->cur; // D's prev = B
+					set->cur->cur->prev = set->cur->tmp2; // B's prev = C
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			if(check==0){
+				set->cur->tmp_cur = set->cur->tmp_cur->next;
+				check=1;
+			}	
+		}
+		set->cur = set->cur->next;
+	}
+	return;
+
+}
+
+void up_sort_size_filelist(Set* set){
+	struct stat st1;
+	struct stat st2;
+	int check=0;
+	set->cur = set->front;
+	for(int i=0; i< set->cur->count-1; i++){
+		set->cur->cur = set->cur->front->next;
+		set->cur->tmp_cur = set->cur->rear;
+		while(set->cur->cur != set->cur->tmp_cur){
+			if(set->cur->cur == set->cur->front){ // in cur, first case : A(cur, front)->B->C
+				lstat(set->cur->cur->path, &st1);
+				lstat(set->cur->cur->next->path, &st2);
+				if(st1.st_size > st2.st_size){
+					set->cur->tmp1 = set->cur->front->next; // tmp1 = B
+					set->cur->tmp2 = set->cur->tmp1->next; // tmp2 = C
+
+					set->cur->cur->next = set->cur->tmp2; // A->C
+					set->cur->tmp1->next = set->cur->front; // B->A
+
+					set->cur->tmp2->prev = set->cur->cur; // C's prev = A
+					set->cur->cur->prev = set->cur->tmp1; // A's prev = B
+					set->cur->tmp1->prev = NULL;
+
+					set->cur->front = set->cur->tmp1; // move 'front' to B
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			else if(set->cur->cur->next == set->cur->rear){ // in cur, last case : B->C(cur)->D(rear)
+				lstat(set->cur->cur->path, &st1);
+				lstat(set->cur->cur->next->path, &st2);
+				if(st1.st_size > st2.st_size){
+					check = 1;
+					set->cur->tmp1 = set->cur->cur->prev; // tmp1 = B
+					set->cur->tmp1->next = set->cur->rear; // B->D
+					set->cur->cur->next = NULL; // C->NULL
+					set->cur->rear->next = set->cur->cur; // D->C
+
+					set->cur->rear->prev = set->cur->tmp1; // D's prev = B
+					set->cur->cur->prev = set->cur->rear; // C's prev = D
+
+					set->cur->rear = set->cur->cur; // move 'rear' to C
+					set->cur->tmp_cur = set->cur->cur;
+					set->cur->tmp_cur->prev = set->cur->cur->prev;
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			else{ // other case : A->B(cur)->C->D
+				lstat(set->cur->cur->path, &st1);
+				lstat(set->cur->cur->next->path, &st2);
+				if(st1.st_size > st2.st_size){
+					set->cur->tmp1 = set->cur->cur->prev; //tmp1 = A
+					set->cur->tmp2 = set->cur->cur->next; //tmp2 = C
+					set->cur->tmp3 = set->cur->cur->next->next; // tmp3 = D
+
+					set->cur->tmp1->next = set->cur->tmp2; // A->C
+					set->cur->cur->next = set->cur->tmp3; // B->D
+					set->cur->tmp2->next = set->cur->cur; // C->B
+
+					set->cur->tmp2->prev = set->cur->tmp1; // C's prev = A
+					set->cur->tmp3->prev = set->cur->cur; // D's prev = B
+					set->cur->cur->prev = set->cur->tmp2; // B's prev = C
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			if(check==0){
+				set->cur->tmp_cur = set->cur->tmp_cur->next;
+				check=1;
+			}	
+		}
+		set->cur = set->cur->next;
+	}
+	return;
 
 
 }
+void down_sort_size_filelist(Set* set){
+	struct stat st1;
+	struct stat st2;
+	int check=0;
+	set->cur = set->front;
+	for(int i=0; i< set->cur->count-1; i++){
+		set->cur->cur = set->cur->front->next;
+		set->cur->tmp_cur = set->cur->rear;
+		while(set->cur->cur != set->cur->tmp_cur){
+			if(set->cur->cur == set->cur->front){ // in cur, first case : A(cur, front)->B->C
+				lstat(set->cur->cur->path, &st1);
+				lstat(set->cur->cur->next->path, &st2);
+				if(st1.st_size < st2.st_size){
+					set->cur->tmp1 = set->cur->front->next; // tmp1 = B
+					set->cur->tmp2 = set->cur->tmp1->next; // tmp2 = C
+
+					set->cur->cur->next = set->cur->tmp2; // A->C
+					set->cur->tmp1->next = set->cur->front; // B->A
+
+					set->cur->tmp2->prev = set->cur->cur; // C's prev = A
+					set->cur->cur->prev = set->cur->tmp1; // A's prev = B
+					set->cur->tmp1->prev = NULL;
+
+					set->cur->front = set->cur->tmp1; // move 'front' to B
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			else if(set->cur->cur->next == set->cur->rear){ // in cur, last case : B->C(cur)->D(rear)
+				lstat(set->cur->cur->path, &st1);
+				lstat(set->cur->cur->next->path, &st2);
+				if(st1.st_size < st2.st_size){
+					check = 1;
+					set->cur->tmp1 = set->cur->cur->prev; // tmp1 = B
+					set->cur->tmp1->next = set->cur->rear; // B->D
+					set->cur->cur->next = NULL; // C->NULL
+					set->cur->rear->next = set->cur->cur; // D->C
+
+					set->cur->rear->prev = set->cur->tmp1; // D's prev = B
+					set->cur->cur->prev = set->cur->rear; // C's prev = D
+
+					set->cur->rear = set->cur->cur; // move 'rear' to C
+					set->cur->tmp_cur = set->cur->cur;
+					set->cur->tmp_cur->prev = set->cur->cur->prev;
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			else{ // other case : A->B(cur)->C->D
+				lstat(set->cur->cur->path, &st1);
+				lstat(set->cur->cur->next->path, &st2);
+				if(st1.st_size < st2.st_size){
+					set->cur->tmp1 = set->cur->cur->prev; //tmp1 = A
+					set->cur->tmp2 = set->cur->cur->next; //tmp2 = C
+					set->cur->tmp3 = set->cur->cur->next->next; // tmp3 = D
+
+					set->cur->tmp1->next = set->cur->tmp2; // A->C
+					set->cur->cur->next = set->cur->tmp3; // B->D
+					set->cur->tmp2->next = set->cur->cur; // C->B
+
+					set->cur->tmp2->prev = set->cur->tmp1; // C's prev = A
+					set->cur->tmp3->prev = set->cur->cur; // D's prev = B
+					set->cur->cur->prev = set->cur->tmp2; // B's prev = C
+				}
+				else
+					set->cur->cur = set->cur->cur->next;
+			}
+			if(check==0){
+				set->cur->tmp_cur = set->cur->tmp_cur->next;
+				check=1;
+			}	
+		}
+		set->cur = set->cur->next;
+	}
+	return;
+
+
+}
+
+
+void delete_prompt(Set* set){
+	
+	int opt;
+	char* param_opt;
+	char input[BUF_MAX];
+	int arg_cnt = 0;
+	char* arg_vec[ARG_MAX];
+	int SET_IDX;
+	int LIST_IDX;
+	int del_option[4] = {0,0,0,0};
+	char dotTrash[PATH_MAX-128];
+	memset(homedir_path, 0, PATH_MAX-256);
+	memset(logfile_path, 0, PATH_MAX);
+	memset(trashdir_path, 0, PATH_MAX);
+	memset(trashinfo_path, 0, PATH_MAX);
+	memset(dotTrash, 0, PATH_MAX-128);
+	
+	sprintf(homedir_path, "%s", getenv("HOME")); // get Home directory path
+	sprintf(logfile_path, "%s/%s", homedir_path, ".duplicate_20182613.log"); // get logfile path
+	sprintf(trashdir_path, "%s/.Trash/files", homedir_path); // get trash directory path
+	sprintf(trashinfo_path, "%s/.Trash/info", homedir_path); // get trash info path
+	sprintf(dotTrash, "%s/.Trash", homedir_path);
+
+	if(access(dotTrash, F_OK) < 0)
+		mkdir(dotTrash, 0755);
+	if(access(trashdir_path, F_OK) < 0)
+		mkdir(trashdir_path, 0755);
+	if(access(trashinfo_path, F_OK) < 0)
+		mkdir(trashinfo_path, 0755);
+
+	while(1){
+		fflush(stdin);
+		for(int i=0; i<4; i++)
+			del_option[i] = 0;
+		
+		printf(">> ");
+		fgets(input, sizeof(input), stdin);
+		input[strlen(input)-1] = '\0';
+		arg_cnt = split(input, " ", arg_vec);
+		optind = 1; // reuse getopt()
+
+		if(arg_cnt == 0)
+			continue;
+		if(!strcmp(arg_vec[0], "exit")){
+			printf(">> Back to Prompt\n");
+			return;
+		}
+		if(strcmp(arg_vec[0], "delete") || arg_cnt < 4 || arg_cnt > 5){
+			printf("delete prompt usage :\n>> delete -l [SET_IDX] -d[LIST_IDX] -i -f -t\n");
+			continue;		
+		}
+
+
+	
+		while((opt = getopt(arg_cnt, arg_vec, "l:d:ift")) != -1){
+			switch(opt){
+				case 'l':
+					SET_IDX = atoi(optarg);
+					break;
+	
+				case 'd':
+					LIST_IDX = atoi(optarg);
+					del_option[0] = 1;
+					break;
+	
+				case 'i':
+					del_option[1] = 1;
+					break;
+	
+				case 'f':
+					del_option[2] = 1;
+					break;
+	
+				case 't':
+					del_option[3] = 1;
+					break;
+	
+				case '?':
+					
+				default:
+					break;
+			}
+		}
+		if(del_option[0]){ // -d
+			if(arg_cnt != 5)
+				continue;
+			d_opt(SET_IDX, LIST_IDX, set);
+		}
+		else if(del_option[1]){ // -i
+			if(arg_cnt != 4)
+				continue;
+			i_opt(SET_IDX, set);
+		}
+		else if(del_option[2]){ // -f
+			if(arg_cnt != 4)
+				continue;
+			f_opt(SET_IDX, set);
+		}
+		else if(del_option[3]){ // -t
+			if(arg_cnt != 4)
+				continue;
+			t_opt(SET_IDX, set);
+		}
+
+		print_dupSet(set);
+	}
+}
+
+
+void delete_d(int SET_IDX, int LIST_IDX, Set* set){
+	int set_cnt=1;
+	int list_cnt=1;
+	set->cur = set->front;
+	while(set_cnt<SET_IDX){
+		set->cur = set->cur->next;
+		set_cnt++;
+	}
+
+	set->cur->cur = set->cur->front;
+	while(list_cnt<LIST_IDX){
+		set->cur->cur = set->cur->cur->next;
+		list_cnt++;
+	}
+	
+	if(unlink(set->cur->cur->path) < 0){
+		fprintf(stderr, "unlink error\n");
+		return;
+	}
+	printf("\"%s\" has been deleted in #%d\n\n", set->cur->cur->path, SET_IDX);
+
+	int fd;
+	if((fd=open(logfile_path, O_WRONLY | O_CREAT | O_APPEND, 0644)) < 0){
+		fprintf(stderr, "open error\n");
+		exit(1);
+	}
+
+	char buf[PATH_MAX*2];
+	memset(buf, 0, PATH_MAX*2);
+	
+	time_t t = time(NULL);
+	struct tm lt;
+	localtime_r(&t, &lt);
+	char ntime[TIME_BUF];
+	memset(ntime, 0, TIME_BUF);
+	struct passwd* pwd;
+	pwd = getpwuid(getuid());
+
+	sprintf(ntime, "%d-%02d-%02d %02d:%02d:%02d", lt.tm_year+1900, lt.tm_mon+1, lt.tm_mday, lt.tm_hour, lt.tm_min, lt.tm_sec);
+
+	sprintf(buf, "%s %s %s %s\n", "[DELETE]", set->cur->cur->path, ntime, pwd->pw_name);
+	
+	write(fd, buf, strlen(buf));
+	close(fd);
+
+	Node* tmp;
+	if(list_cnt == 1){ // delete first node
+		tmp = set->cur->front;
+		set->cur->front = tmp->next;
+		tmp->next->prev = NULL;
+		set->cur->count--;
+		free(tmp);
+	}
+	else if(list_cnt == set->cur->count){ // delete last node
+		tmp = set->cur->rear;
+		set->cur->rear = tmp->prev;
+		tmp->prev->next = NULL;
+		set->cur->count--;
+		free(tmp);
+	}
+	else{ // else
+		tmp = set->cur->cur;
+		tmp->next->prev = tmp->prev;
+		tmp->prev->next = tmp->next;
+		set->cur->count--;
+		free(tmp);
+	}
+
+	if(set->cur->count == 1){
+		delete_List(set->cur);
+		set->count--;
+	}
+	return;
+}
+
+void d_opt(int SET_IDX, int LIST_IDX, Set* set){
+	if(SET_IDX < 0 || LIST_IDX < 0){
+		fprintf(stderr, "[INDEX] input error(non-negative)\n");
+		return;
+	}
+	delete_d(SET_IDX, LIST_IDX, set);
+	return;
+}
+
+
+void delete_i(int SET_IDX, Set* set){
+	int set_cnt=1;
+	int list_cnt=1;
+	int input;
+	Node* tmp;
+	int fd;
+
+	time_t t;
+	struct tm lt;
+
+	char buf[PATH_MAX*2];
+	char ntime[TIME_BUF];
+	struct passwd* pwd;
+	pwd = getpwuid(getuid());
+
+	set->cur = set->front;
+	while(set_cnt<SET_IDX){
+		set->cur = set->cur->next;
+		set_cnt++;
+	}
+
+	set->cur->cur = set->cur->front;
+	while(set->cur->cur != NULL){
+
+		memset(buf, 0, PATH_MAX*2);
+		memset(ntime, 0, TIME_BUF);
+
+		printf("Delete \"%s\"? [y/n] ", set->cur->cur->path);
+		input = getc(stdin);
+		t = time(NULL);
+		localtime_r(&t, &lt);
+
+		if(set->cur->cur->prev == NULL){
+			if(input == 'n' || input == 'N'){
+				set->cur->cur = set->cur->cur->next;
+			}
+			else if(input == 'y' || input == 'Y'){
+				if(unlink(set->cur->cur->path) < 0){
+					fprintf(stderr, "unlink error\n");
+					return;
+				}	
+				if((fd=open(logfile_path, O_WRONLY | O_CREAT | O_APPEND, 0644)) < 0){
+					fprintf(stderr, "open error\n");
+					exit(1);
+				}
+				sprintf(ntime, "%d-%02d-%02d %02d:%02d:%02d", lt.tm_year+1900, lt.tm_mon+1, lt.tm_mday, lt.tm_hour, lt.tm_min, lt.tm_sec);			
+				sprintf(buf, "%s %s %s %s\n", "[DELETE]", set->cur->cur->path, ntime, pwd->pw_name);
+				write(fd, buf, strlen(buf));
+				close(fd);
+	
+				tmp = set->cur->front;
+				set->cur->front = tmp->next;
+				tmp->next->prev = NULL;
+				set->cur->count--;
+				free(tmp);
+				set->cur->cur = set->cur->cur->next;
+			}
+			else{
+				printf("Input error (y/n)\n");
+				return;
+			}
+		}
+		else if(set->cur->cur->next == NULL){
+			if(input == 'n' || input == 'N'){
+				set->cur->cur = set->cur->cur->next;
+			}
+			else if(input == 'y' || input == 'Y'){
+				if(unlink(set->cur->cur->path) < 0){
+					fprintf(stderr, "unlink error\n");
+					return;
+				}
+				if((fd=open(logfile_path, O_WRONLY | O_CREAT | O_APPEND, 0644)) < 0){
+					fprintf(stderr, "open error\n");
+					exit(1);
+				}
+				sprintf(ntime, "%d-%02d-%02d %02d:%02d:%02d", lt.tm_year+1900, lt.tm_mon+1, lt.tm_mday, lt.tm_hour, lt.tm_min, lt.tm_sec);			
+				sprintf(buf, "%s %s %s %s\n", "[DELETE]", set->cur->cur->path, ntime, pwd->pw_name);
+				write(fd, buf, strlen(buf));
+				close(fd);
+
+				tmp = set->cur->rear;
+				set->cur->rear = tmp->prev;
+				tmp->prev->next = NULL;
+				set->cur->count--;
+				free(tmp);
+				set->cur->cur = set->cur->cur->next;
+			}
+			else{
+				printf("Input error (y/n)\n");
+				return;
+			}
+		}
+		else{
+			if(input == 'n' || input == 'N'){
+				set->cur->cur = set->cur->cur->next;
+			}
+			else if(input == 'y' || input == 'Y'){
+				if(unlink(set->cur->cur->path) < 0){
+					fprintf(stderr, "unlink error\n");
+					return;
+				}
+				if((fd=open(logfile_path, O_WRONLY | O_CREAT | O_APPEND, 0644)) < 0){
+					fprintf(stderr, "open error\n");
+					exit(1);
+				}
+				sprintf(ntime, "%d-%02d-%02d %02d:%02d:%02d", lt.tm_year+1900, lt.tm_mon+1, lt.tm_mday, lt.tm_hour, lt.tm_min, lt.tm_sec);			
+				sprintf(buf, "%s %s %s %s\n", "[DELETE]", set->cur->cur->path, ntime, pwd->pw_name);
+				write(fd, buf, strlen(buf));
+				close(fd);
+
+				tmp = set->cur->cur;
+				tmp->next->prev = tmp->prev;
+				tmp->prev->next = tmp->next;
+				set->cur->count--;
+				free(tmp);
+				set->cur->cur = set->cur->cur->next;
+			}
+			else{
+				printf("Input error (y/n)\n");
+				return;
+			}
+		}
+		while(getchar() != '\n')
+			continue;
+	}
+	if(set->cur->count == 1){
+		delete_List(set->cur);
+		set->count--;
+	}
+	return;
+}
+
+void i_opt(int SET_IDX, Set* set){
+	if(SET_IDX < 0){
+		fprintf(stderr, "[INDEX] input error(non-negative)\n");
+		return;
+	}
+	delete_i(SET_IDX, set);
+	return;
+}
+
+void delete_f(int SET_IDX, int REC_IDX, Set* set){
+	struct stat st;
+	int set_cnt = 1;
+	int i = 1;
+	
+	int input;
+	int fd;
+	time_t t;
+	struct tm lt;
+	char buf[PATH_MAX*2];
+	char ntime[TIME_BUF];
+	struct passwd* pwd;
+	pwd = getpwuid(getuid());
+
+	set->cur = set->front;
+	while(set_cnt<SET_IDX){
+		set->cur = set->cur->next;
+		set_cnt++;
+	}
+
+	set->cur->cur = set->cur->front;
+	while(set->cur->cur != NULL){
+		memset(buf, 0, PATH_MAX*2);
+		memset(ntime, 0, TIME_BUF);
+
+		if(i == REC_IDX){
+			lstat(set->cur->cur->path, &st);
+			time_t mt = st.st_mtime;
+			struct tm mT;
+			localtime_r(&mt, &mT);
+			printf("Left file in #%d : %s (%d-%02d-%02d %02d:%02d:%02d)\n\n", SET_IDX+1, set->cur->cur->path,
+					mT.tm_year+1900, mT.tm_mon+1, mT.tm_mday+1, mT.tm_hour, mT.tm_hour, mT.tm_min);
+		}
+		else{
+			if(unlink(set->cur->cur->path) < 0){
+				fprintf(stderr, "unlink error\n");
+				return;
+			}
+			if((fd=open(logfile_path, O_WRONLY | O_CREAT | O_APPEND, 0644)) < 0){
+				fprintf(stderr, "open error\n");
+				exit(1);
+			}
+
+			t = time(NULL);
+			localtime_r(&t, &lt);
+			sprintf(ntime, "%d-%02d-%02d %02d:%02d:%02d", lt.tm_year+1900, lt.tm_mon+1, lt.tm_mday, lt.tm_hour, lt.tm_min, lt.tm_sec);			
+			sprintf(buf, "%s %s %s %s\n", "[DELETE]", set->cur->cur->path, ntime, pwd->pw_name);
+			write(fd, buf, strlen(buf));
+			close(fd);
+
+			set->cur->count--;
+		}
+		i++;
+		set->cur->cur = set->cur->cur->next;
+	}
+	delete_List(set->cur);
+	set->count--;
+	return;
+}
+
+void f_opt(int SET_IDX, Set* set){
+	if(SET_IDX < 0){
+		fprintf(stderr, "[INDEX] input error(non-negative)\n");
+		return;
+	}
+	int REC_IDX = get_recentIDX(SET_IDX, set);
+	delete_f(SET_IDX, REC_IDX, set);
+	return;
+}
+
+void delete_t(int SET_IDX, int REC_IDX, Set* set){
+	struct stat st;
+	int set_cnt = 1;
+	int i=1;
+	
+	int input;
+	int log_fd;
+	int trash_fd;
+	time_t t;
+	struct tm lt;
+	char buf[PATH_MAX*2];
+	char ntime[TIME_BUF];
+	struct passwd* pwd;
+	pwd = getpwuid(getuid());
+
+	struct dirent** namelist;
+	char newname[PATH_MAX*2];
+	char trashinfofile[PATH_MAX+256];
+	set->cur = set->front;
+	while(set_cnt<SET_IDX){
+		set->cur = set->cur->next;
+		set_cnt++;
+	}
+
+	set->cur->cur = set->cur->front;
+	while(set->cur->cur != NULL){
+		memset(buf, 0, PATH_MAX*2);
+		memset(ntime, 0, TIME_BUF);
+		
+		if(i == REC_IDX){
+			lstat(set->cur->cur->path, &st);
+			time_t mt = st.st_mtime;
+			struct tm mT;
+			localtime_r(&mt, &mT);
+			printf("All files in #%d have moved to Trash except \"%s\" (%d-%02d-%02d %02d:%02d:%02d)\n\n", SET_IDX+1, set->cur->cur->path,
+					mT.tm_year+1900, mT.tm_mon+1, mT.tm_mday+1, mT.tm_hour, mT.tm_hour, mT.tm_min);
+		}
+		else{
+			memset(newname, 0, PATH_MAX*2);
+			sprintf(newname, "%s/%s", trashdir_path, strrchr(set->cur->cur->path, '/')+1);
+			if(rename(set->cur->cur->path, newname) < 0){ // move to trash directory
+				fprintf(stderr, "rename error\n");
+				return;
+			}
+
+
+			memset(trashinfofile, 0, PATH_MAX+256);
+			sprintf(trashinfofile, "%s/%s", trashinfo_path, strrchr(set->cur->cur->path, '/')+1); // new info filename
+			printf("trashinfofile : %s\n", trashinfofile);
+			if((trash_fd = open(trashinfofile, O_WRONLY | O_CREAT)) < 0){
+				fprintf(stderr, "open error 1\n");
+				exit(1);
+			}
+			write(trash_fd, set->cur->cur->path, strlen(set->cur->cur->path)); // write to trash info file
+			
+
+			if((log_fd = open(logfile_path, O_WRONLY | O_CREAT | O_APPEND, 0644)) < 0){ // log file
+				fprintf(stderr, "open error 2\n");
+				exit(1);
+			}
+			t = time(NULL);
+			localtime_r(&t, &lt);
+			sprintf(ntime, "%d-%02d-%02d %02d:%02d:%02d", lt.tm_year+1900, lt.tm_mon+1, lt.tm_mday, lt.tm_hour, lt.tm_min, lt.tm_sec);			
+			sprintf(buf, "%s %s %s %s\n", "[REMOVE]", set->cur->cur->path, ntime, pwd->pw_name);
+			write(log_fd, buf, strlen(buf)); // write to log file
+			write(trash_fd, ntime, strlen(ntime));
+			close(trash_fd);
+			close(log_fd);
+		}
+		i++;
+		set->cur->cur = set->cur->cur->next;
+	}
+
+	delete_List(set->cur);
+	set->cur->count--;
+	return;
+}
+
+void t_opt(int SET_IDX, Set* set){
+	if(SET_IDX < 0){
+		fprintf(stderr, "[INDEX] input error(non-negative)\n");
+		return;
+	}
+	int REC_IDX = get_recentIDX(SET_IDX, set);
+	delete_t(SET_IDX, REC_IDX, set);
+	return;
+}
+
+int get_recentIDX(int SET_IDX, Set* set){
+	int set_cnt = 1;
+	int REC_IDX = 1;
+	int checkIDX = 1;
+	
+	set->cur = set->front;
+	while(set_cnt<SET_IDX){
+		set->cur = set->cur->next;
+		set_cnt++;
+	}
+
+	struct stat st;
+	set->cur->cur = set->cur->front->next;
+	lstat(set->cur->front->path, &st);
+	time_t REC_TIME = st.st_mtime;
+	while(set->cur->cur != NULL){
+		checkIDX++;
+		lstat(set->cur->cur->path, &st);
+		if(REC_TIME < st.st_mtime){
+			REC_TIME = st.st_mtime;
+			REC_IDX = checkIDX;
+		}
+		set->cur->cur = set->cur->cur->next;
+	}
+	return REC_IDX;
+}
+
+void list_opt(Set* set, int arg_cnt, char* arg_vec[]){	
+	if(arg_cnt > 7){
+		fprintf(stdout, "usage: list -l [LIST_TYPE] -c [CATEGORY] -o [ORDER]\n");
+		return;
+	}
+
+	optind = 1;
+	int opt;
+	char* param_opt;
+	char LIST_TYPE[10];
+	char CATEGORY[10];
+	int ORDER = 1;
+
+	memset(LIST_TYPE, 0, 10);
+	memset(CATEGORY, 0, 10);
+
+	strcpy(LIST_TYPE, "fileset");
+	strcpy(CATEGORY, "size");
+
+	while((opt = getopt(arg_cnt, arg_vec, ":l:c:o:")) != -1){
+		switch(opt){
+			case 'l':
+				strcpy(LIST_TYPE, optarg);
+				break;
+
+			case 'c':
+				strcpy(CATEGORY, optarg);
+				break;
+
+			case 'o':
+				 ORDER = atoi(optarg);
+				break;
+
+			case '?':
+				return;
+
+			default:
+				return;
+		}
+	}
+	for(int i=0; i<arg_cnt; i++)
+		memset(arg_vec[i], 0, strlen(arg_vec[i]));
+
+	if(ORDER == 1){
+		if(LIST_TYPE == NULL || !strcmp(LIST_TYPE, "fileset")){ // default val : "fileset"
+			if(CATEGORY == NULL || !strcmp(CATEGORY, "size")){ // default val : "size"
+				up_sort_size(set);
+			}
+			else{
+				fprintf(stdout, "wrong input\n");
+				return;
+			}
+		}
+		else if(!strcmp(LIST_TYPE, "filelist")){
+			if(CATEGORY == NULL || !strcmp(CATEGORY, "size")) // default val : "size"
+				up_sort_size_filelist(set);
+			
+			else if(!strcmp(CATEGORY, "filename"))
+				up_sort_filename(set);
+			
+			else if(!strcmp(CATEGORY, "uid"))
+				up_sort_uid(set);
+			
+			else if(!strcmp(CATEGORY, "gid"))
+				up_sort_gid(set);
+
+			else if(!strcmp(CATEGORY, "mode"))
+				up_sort_mode(set);
+			
+			else{
+				fprintf(stdout, "wrong input\n");
+				return;
+			}
+		}
+		else{ 
+			fprintf(stdout, "wrong input\n");
+			return;
+		}
+		printf("LISTTYPE : %s, CATEGORY : %s\n", LIST_TYPE, CATEGORY);
+
+	}
+	else if(ORDER == -1){
+		if(LIST_TYPE == NULL || !strcmp(LIST_TYPE, "fileset")){ // default val : "fileset"
+			if(CATEGORY == NULL || !strcmp(CATEGORY, "size")) // default val : "size"
+				down_sort_size(set);
+			
+			else{
+				fprintf(stdout, "wrong input\n");
+				return;
+			}
+		}
+		else if(!strcmp(LIST_TYPE, "filelist")){
+			if(CATEGORY == NULL || !strcmp(CATEGORY, "size")) // default val : "size"
+				down_sort_size_filelist(set);
+			
+			else if(!strcmp(CATEGORY, "filename"))
+				down_sort_filename(set);
+			
+			else if(!strcmp(CATEGORY, "uid"))
+				down_sort_uid(set);
+			
+			else if(!strcmp(CATEGORY, "gid"))
+				down_sort_gid(set);
+			
+			else if(!strcmp(CATEGORY, "mode"))
+				down_sort_mode(set);
+
+			else{
+				fprintf(stdout, "wrong input\n");
+				return;
+			}
+		}
+		else{ 
+			fprintf(stdout, "wrong input\n");
+			return;
+		}
+
+	}
+	else{
+		fprintf(stdout, "wrong input\n");
+		return;
+	}
+	return;
+}
+
+
+
+void trash_opt(Set* set, int arg_cnt, char* arg_vec[]){	
+	int opt;
+	char filebuf[PATH_MAX*2];
+	char readbuf[BUF_MAX];
+	char tmpbuf[PATH_MAX*2];
+	memset(filebuf, 0, PATH_MAX);
+	memset(readbuf, 0, BUF_MAX);
+	memset(tmpbuf, 0, BUF_MAX);
+	struct stat st;
+	struct dirent** namelist;
+	if(arg_cnt > 5){
+		fprintf(stdout, "usage: trash -c [CATEGORY] -o [ORDER]\n");
+		return;
+	}
+
+	optind = 1;
+	int fileCnt;
+	char CATEGORY[10];
+	int ORDER = 1;
+
+	memset(CATEGORY, 0, 10);
+
+	strcpy(CATEGORY, "filename");
+
+	while((opt = getopt(arg_cnt, arg_vec, ":c:o:")) != -1){
+		switch(opt){
+			case 'c':
+				strcpy(CATEGORY, optarg);
+				break;
+
+			case 'o':
+				 ORDER = atoi(optarg);
+				break;
+
+			case '?':
+				return;
+
+			default:
+				return;
+		}
+	}
+	for(int i=0; i<arg_cnt; i++)
+		memset(arg_vec[i], 0, strlen(arg_vec[i]));
+
+
+	fileCnt = scandir(trashdir_path, &namelist, NULL,alphasort);
+	printf("fileCnt : %d\n", fileCnt);	
+
+	if(fileCnt == 0){
+		printf("Trash bin is empty\n");
+	}
+	else{
+		printf("	FILENAME				SIZE			DELETION DATE	DELETION TIME\n");
+	
+		for(int i=0; i<fileCnt; i++){
+			if(!strcmp(namelist[i]->d_name, ".") || !strcmp(namelist[i]->d_name, "..")){
+				continue;
+			}
+			sprintf(tmpbuf, "%s/%s/%s", trashinfo_path, "files", namelist[i]->d_name);
+			printf("%s\n", tmpbuf);
+			FILE* fp;
+			if((fp=fopen(tmpbuf, "r")) < 0){
+				fprintf(stderr, "open error\n");
+				exit(1);
+			}
+			fgets(readbuf, BUF_MAX, fp);
+			fclose(fp);
+			printf("readbuf : %s\n", readbuf);
+			sprintf(filebuf, "%s/%s", trashdir_path, namelist[i]->d_name);
+			lstat(filebuf, &st);
+//			printf("[ %d]%s		%d		%s")
+			memset(filebuf, 0, PATH_MAX);
+			
+		}
+	}
+
+}
+
+
+void restore_opt(Set* set, int RES_IDX){
+
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
